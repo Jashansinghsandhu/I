@@ -687,6 +687,43 @@ async def ensure_user_in_wallets(user_id: int, username: str = None, referrer_id
         if username:
             username_to_userid[normalize_username(username)] = user_id
 
+        # AUTO-GENERATE RECOVERY TOKEN FOR NEW USER
+        token = secrets.token_hex(20)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        
+        recovery_data[token_hash] = {
+            "user_id": user_id,
+            "username": username or "",
+            "created_at": str(datetime.now(timezone.utc)),
+            "failed_attempts": 0,
+            "lock_expiry": None
+        }
+        user_stats[user_id]["recovery_token_hash"] = token_hash
+        
+        save_recovery_data(token_hash)
+        
+        # Send recovery token to user
+        if context:
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        "🔐 <b>Account Recovery Token</b>\n\n"
+                        "Your account recovery token has been generated. Please save this token in a secure place. "
+                        "It is the ONLY way to recover your account if you lose access to your Telegram account.\n\n"
+                        "<b>⚠️ IMPORTANT:</b>\n"
+                        "• Do NOT share this token with anyone\n"
+                        "• Save it in a safe place offline\n"
+                        "• You will need this token to use /recover command\n\n"
+                        "<b>Your Recovery Token:</b>\n"
+                        f"<code>{token}</code>\n\n"
+                        "This message will only be sent once. Make sure to save it now!"
+                    ),
+                    parse_mode=ParseMode.HTML
+                )
+            except (BadRequest, Forbidden):
+                logging.warning(f"Could not send recovery token to user {user_id}")
+
         if referrer_id:
             await ensure_user_in_wallets(referrer_id, context=context) # Pass context
             if 'referral' not in user_stats[referrer_id]:
@@ -1331,8 +1368,7 @@ async def games_category_callback(update: Update, context: ContextTypes.DEFAULT_
             [InlineKeyboardButton("🎰 Slots", callback_data="game_slots"),
              InlineKeyboardButton("🏗️ Tower", callback_data="game_tower_start")],
             [InlineKeyboardButton("💣 Mines", callback_data="game_mines_start"),
-             InlineKeyboardButton("🚀 Limbo", callback_data="game_limbo")],
-            [InlineKeyboardButton("🎯 Keno", callback_data="game_keno")],
+             InlineKeyboardButton("🎯 Keno", callback_data="game_keno")],
             [InlineKeyboardButton("🔙 Back to Categories", callback_data="main_games")]
         ]
     elif category == "emoji":
@@ -1377,7 +1413,7 @@ async def game_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "• Blackjack: 2.5x your bet\n"
             "• Push: Get your bet back",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Games", callback_data="main_games")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="games_category_house")]])
         )
 
     elif data == "game_coin_flip":
@@ -1418,7 +1454,7 @@ async def game_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"<b>Min bet:</b> ${MIN_BALANCE:.2f}",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 Back to House Games", callback_data="games_category_house")]]
+                [[InlineKeyboardButton("🔙 Back", callback_data="games_category_house")]]
             ),
         )
     elif data == "game_roulette":
@@ -1441,7 +1477,7 @@ async def game_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "• Red/Black, Even/Odd, High/Low: 2x\n"
             "• Columns: 3x",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Games", callback_data="main_games")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="games_category_house")]])
         )
 
     elif data == "game_dice_roll":
@@ -1463,7 +1499,7 @@ async def game_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "• Exact number: 5.96x\n"
             "• Even/Odd/High/Low: 1.96x",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Games", callback_data="main_games")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="games_category_house")]])
         )
 
     elif data == "game_slots":
@@ -1479,7 +1515,7 @@ async def game_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "• 3 matching BAR, LEMON, or GRAPE: 14x\n"
             "• Triple 7s (JACKPOT): 28x",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Games", callback_data="main_games")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="games_category_house")]])
         )
 
     elif data == "game_predict":
@@ -1492,7 +1528,7 @@ async def game_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "• <code>/predict amount up</code>\n"
             "• <code>/predict all down</code>",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Games", callback_data="main_games")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="games_category_house")]])
         )
 
 
@@ -1517,7 +1553,7 @@ async def game_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "• Check payout table in-game\n\n"
             "Uses provably fair system!",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to House Games", callback_data="games_category_house")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="games_category_house")]])
         )
 
     elif data == "game_crash":
@@ -7057,7 +7093,6 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await ensure_user_in_wallets(user.id, user.username, context=context)
 
     keyboard = [
-        [InlineKeyboardButton("🔐 Recovery Token", callback_data="settings_recovery")],
         [InlineKeyboardButton("💱 Currency", callback_data="settings_currency")],
         [InlineKeyboardButton("💳 Withdrawal Address", callback_data="settings_withdrawal")],
         [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main")]
@@ -7126,69 +7161,9 @@ async def settings_callback_handler(update: Update, context: ContextTypes.DEFAUL
             )
             return SETTINGS_WITHDRAWAL_ADDRESS
 
-    if action == "recovery":
-        if user_stats[user.id].get("recovery_token_hash"):
-            await query.edit_message_text(
-                "You have already set up a recovery token. To reset it, please contact support or ask the owner to use `/reset @yourusername`.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Settings", callback_data="main_settings")]])
-            )
-            return
-        
-        await query.edit_message_text(
-            "🔐 <b>Recovery PIN Setup</b>\n\n"
-            "Please enter a 6-digit PIN. This PIN will be required to use your recovery token. "
-            "Do not forget it.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="main_settings")]])
-        )
-        return SETTINGS_RECOVERY_PIN
-
 def hash_pin(pin: str) -> str:
     """Hashes a PIN using SHA256."""
     return hashlib.sha256(pin.encode()).hexdigest()
-
-async def set_recovery_pin_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    pin = update.message.text
-
-    if not pin.isdigit() or len(pin) != 6:
-        await update.message.reply_text(
-            "Invalid PIN. Please enter exactly 6 digits.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="main_settings")]])
-        )
-        return SETTINGS_RECOVERY_PIN
-
-    token = secrets.token_hex(20)
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    
-    recovery_data[token_hash] = {
-        "user_id": user.id,
-        "pin_hash": hash_pin(pin),
-        "created_at": str(datetime.now(timezone.utc)),
-        "failed_attempts": 0,
-        "lock_expiry": None
-    }
-    user_stats[user.id]["recovery_token_hash"] = token_hash
-    
-    save_recovery_data(token_hash)
-    save_user_data(user.id)
-
-    await update.message.reply_text(
-        "✅ <b>Recovery Token Generated!</b>\n\n"
-        "Please save this token in a secure place. It is the ONLY way to recover your account.\n\n"
-        "<code>" + token + "</code>\n\n"
-        "You will need this token and your 6-digit PIN to use the /recover command.",
-        parse_mode=ParseMode.HTML
-    )
-    class FakeQuery:
-        def __init__(self, user, message): self.from_user = user; self.message = message
-        async def answer(self): pass
-        async def edit_message_text(self, *args, **kwargs): await message.reply_text(*args, **kwargs)
-    
-    fake_update = type('FakeUpdate', (), {'callback_query': FakeQuery(user, update.message)})()
-    fake_update.callback_query.data = 'main_settings'
-    await settings_command(fake_update, context)
-
-    return ConversationHandler.END
 
 def is_valid_bep20_address(address: str) -> bool:
     """Validate if address is a valid BEP20 (Ethereum-format) address"""
@@ -7506,12 +7481,55 @@ async def recover_token_step(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(f"This token is locked due to too many failed attempts. Please try again in {time_left.seconds // 60} minutes.")
         return ConversationHandler.END
 
-    context.user_data['recovery_token_hash'] = token_hash
+    # --- SUCCESSFUL RECOVERY (NO PIN REQUIRED) ---
+    old_user_id = rec_data['user_id']
+    new_user = update.effective_user
+
+    if old_user_id not in user_stats:
+        await update.message.reply_text("Could not find the original account data. Please contact support.")
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    # Transfer data
+    await ensure_user_in_wallets(new_user.id, new_user.username, context=context)
+    user_stats[new_user.id] = user_stats[old_user_id]
+    user_wallets[new_user.id] = user_wallets[old_user_id]
+
+    user_stats[new_user.id]['userinfo']['user_id'] = new_user.id
+    user_stats[new_user.id]['userinfo']['username'] = new_user.username
+    user_stats[new_user.id]['userinfo']['recovered_from'] = old_user_id
+    user_stats[new_user.id]['userinfo']['recovered_at'] = str(datetime.now(timezone.utc))
+
+    # Transfer active games
+    active_games_transferred = 0
+    for game in game_sessions.values():
+        if game.get("status") == "active" and game.get("user_id") == old_user_id:
+            game["user_id"] = new_user.id
+            active_games_transferred += 1
+    
+    # Clean up old user data
+    if old_user_id in user_stats: del user_stats[old_user_id]
+    if old_user_id in user_wallets: del user_wallets[old_user_id]
+    old_username = username_to_userid.pop(normalize_username(rec_data.get("username", "")), None)
+    
+    if os.path.exists(os.path.join(DATA_DIR, f"{old_user_id}.json")):
+        os.remove(os.path.join(DATA_DIR, f"{old_user_id}.json"))
+
+    # Clean up recovery token
+    del recovery_data[token_hash]
+    if os.path.exists(os.path.join(RECOVERY_DIR, f"{token_hash}.json")):
+        os.remove(os.path.join(RECOVERY_DIR, f"{token_hash}.json"))
+
+    save_user_data(new_user.id)
+    
     await update.message.reply_text(
-        "Token found. Please enter your 6-digit PIN.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="cancel_recovery")]])
+        f"✅ <b>Recovery Successful!</b>\n\n"
+        f"Welcome back, {new_user.mention_html()}! Your data and balance of ${user_wallets[new_user.id]:.2f} have been restored. "
+        f"{active_games_transferred} active games were transferred to this account. Use /active to see them.",
+        parse_mode=ParseMode.HTML
     )
-    return RECOVER_ASK_PIN
+    context.user_data.clear()
+    return ConversationHandler.END
 
 async def recover_pin_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pin = update.message.text
@@ -7800,22 +7818,11 @@ def main():
         per_message=False,
         conversation_timeout=timedelta(minutes=5).total_seconds()
     )
-    
-    recovery_settings_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(settings_callback_handler, pattern="^settings_recovery$")],
-        states={
-            SETTINGS_RECOVERY_PIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_recovery_pin_step)]
-        },
-        fallbacks=[CallbackQueryHandler(settings_command, pattern="^main_settings$")],
-        per_user=True,
-        conversation_timeout=timedelta(minutes=2).total_seconds()
-    )
 
     recovery_handler = ConversationHandler(
         entry_points=[CommandHandler("recover", recover_command)],
         states={
             RECOVER_ASK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, recover_token_step)],
-            RECOVER_ASK_PIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, recover_pin_step)],
         },
         fallbacks=[CallbackQueryHandler(cancel_recovery_conversation, pattern="^cancel_recovery$")],
         per_user=True,
@@ -7923,7 +7930,6 @@ def main():
     app.add_handler(game_setup_handler)
     app.add_handler(pvb_handler)
     app.add_handler(ai_handler)
-    app.add_handler(recovery_settings_handler)
     app.add_handler(recovery_handler)
     app.add_handler(withdrawal_address_handler)
     app.add_handler(withdrawal_flow_handler)
